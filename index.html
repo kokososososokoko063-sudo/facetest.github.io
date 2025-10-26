@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ar">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>تجربة كاميرا - تعابير الوجه (HTML)</title>
+  <style>
+    body{font-family: system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial; padding:12px; background:#f7f7fb; color:#111}
+    .card{background:white;border-radius:12px;padding:12px;box-shadow:0 6px 18px rgba(20,20,40,0.08);max-width:920px;margin:12px auto}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    video{max-width:100%;border-radius:8px;display:block}
+    canvas{position:absolute;left:0;top:0; border-radius:8px}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    label{font-size:13px}
+    input[type=text]{padding:6px;border-radius:6px;border:1px solid #ddd}
+    button{padding:8px 10px;border-radius:8px;border:0;background:#2b6cb0;color:white;cursor:pointer}
+  </style>
+</head>
+<body dir="rtl">
+  <div class="card">
+    <h2>تجربة كاميرا - كشف تعابير الوجه (نسخة HTML)</h2>
+    <p id="status">جارٍ تحميل المكتبة...</p>
+    <div style="position:relative;max-width:640px;margin:8px 0">
+      <video id="video" playsinline autoplay muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="controls">
+      <button id="snap">حفظ صورة</button>
+      <button id="restart">إعادة تشغيل الكاميرا</button>
+      <label><input id="useTiny" type="checkbox" checked /> نموذج خفيف</label>
+    </div>
+    <div style="margin-top:10px">
+      <strong>النتيجة الحالية:</strong>
+      <div id="result">لا يوجد وجه مكتشف.</div>
+    </div>
+    <hr/>
+    <div>
+      <strong>تخصيص التسمية للعرض</strong><br/>
+      <small>عدل النص المعروض بدلاً من كلمة التعبير الإنجليزية</small>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <input data-key="neutral" value="محايد"/><input data-key="happy" value="سعيد"/>
+        <input data-key="sad" value="حزين"/><input data-key="angry" value="عصبي"/>
+        <input data-key="fearful" value="خائف"/><input data-key="disgusted" value="مقرف"/>
+        <input data-key="surprised" value="متفاجئ"/>
+      </div>
+    </div>
+    <p style="font-size:12px;color:#666">المعالجة تتم محليًا؛ هذه التسمية للإشارة فقط وليست قياسًا مؤكداً للحالة الداخلية.</p>
+  </div>
+
+<script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+<script>
+const statusEl = document.getElementById('status');
+const video = document.getElementById('video');
+const canvas = document.getElementById('overlay');
+const resultEl = document.getElementById('result');
+const snapBtn = document.getElementById('snap');
+const restartBtn = document.getElementById('restart');
+const useTinyCheckbox = document.getElementById('useTiny');
+
+let mapping = {
+  neutral: 'محايد', happy: 'سعيد', sad: 'حزين', angry: 'عصبي',
+  fearful: 'خائف', disgusted: 'مقرف', surprised: 'متفاجئ'
+};
+
+document.querySelectorAll('input[data-key]').forEach(inp => {
+  inp.addEventListener('input', ()=> mapping[inp.dataset.key]=inp.value );
+});
+
+async function loadModels(){
+  statusEl.textContent = 'جارٍ تحميل النماذج...';
+  try{
+    await faceapi.nets.tinyFaceDetector.loadFromUri('./Models');
+    await faceapi.nets.faceLandmark68Net.loadFromUri('./Models');
+    await faceapi.nets.faceExpressionNet.loadFromUri('./Models');
+    statusEl.textContent = 'جاهز — افتح الكاميرا';
+    startVideo();
+  }catch(e){
+    console.error(e);
+    statusEl.textContent = 'فشل تحميل النماذج. ضع مجلد /models في public أو نفس المسار.';
+  }
+}
+
+async function startVideo(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'}, audio:false});
+    video.srcObject = stream;
+    await video.play();
+    statusEl.textContent = 'الكاميرا تعمل — ينتظر التحليل...';
+    runDetection();
+  }catch(e){
+    console.error(e);
+    statusEl.textContent = 'لا يمكن الوصول للكاميرا.';
+  }
+}
+
+function restart(){
+  if(video.srcObject){
+    const tracks = video.srcObject.getTracks();
+    tracks.forEach(t=>t.stop());
+    video.srcObject = null;
+  }
+  startVideo();
+}
+
+restartBtn.addEventListener('click', restart);
+
+snapBtn.addEventListener('click', ()=>{
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext('2d').drawImage(video,0,0);
+  const a = document.createElement('a'); a.href = c.toDataURL('image/png'); a.download = 'snapshot.png'; a.click();
+});
+
+async function runDetection(){
+  const displaySize = { width: video.videoWidth, height: video.videoHeight };
+  canvas.width = displaySize.width; canvas.height = displaySize.height;
+  const ctx = canvas.getContext('2d');
+  setInterval(async ()=>{
+    if(video.paused || video.ended) return;
+    const options = useTinyCheckbox.checked ? new faceapi.TinyFaceDetectorOptions() : new faceapi.SsdMobilenetv1Options();
+    const result = await faceapi.detectSingleFace(video, options).withFaceLandmarks().withFaceExpressions();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(result){
+      const resized = faceapi.resizeResults(result, displaySize);
+      faceapi.draw.drawDetections(canvas, resized);
+      faceapi.draw.drawFaceLandmarks(canvas, resized);
+      const expressions = result.expressions;
+      const sorted = Object.entries(expressions).sort((a,b)=>b[1]-a[1]);
+      const top = sorted[0];
+      const label = top[0]; const score = top[1];
+      resultEl.innerHTML = `التعبير: <b>${mapping[label]||label}</b> — دقة تقريبية ${(score*100).toFixed(1)}%`;
+    } else {
+      resultEl.textContent = 'لا يوجد وجه مكتشف.';
+    }
+  }, 300);
+}
+
+loadModels();
+</script>
+</body>
+</html>
